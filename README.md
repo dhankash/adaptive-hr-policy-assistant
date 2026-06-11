@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # KPM HR Policy Assistant
 
 Browser-based Retrieval-Augmented Generation (RAG) chatbot for the course project "HR Policy Assistant: A Retrieval-Augmented Conversational Chatbot."
@@ -48,3 +49,7 @@ http://127.0.0.1:7860
 ## Notes
 
 The answer generator defaults to a reliable grounded summarization path instead of open-ended generation. This keeps responses policy-based and avoids hallucinating when a local LLM is unavailable or slow.
+=======
+# adaptive-hr-policy-assistant
+clone of kpm-hr-policy-assistant, but with adaptive features.
+>>>>>>> 9d0aecd7a12fb776500fa333a447495c0af08685
