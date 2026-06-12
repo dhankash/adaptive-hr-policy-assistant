@@ -91,7 +91,7 @@ def debug_rag(test_query: str = "How does FMLA work?") -> None:
     answer = HRPolicyAssistant(retriever=retriever).answer(
         test_query, name="Alex", memory=ConversationMemory()
     )
-    print("Final answer:")
+    print("")
     print(answer.answer)
 
 
@@ -101,7 +101,7 @@ def sources_markdown(sources: list[dict]) -> str:
     lines = ["### Retrieved Sources"]
     for source in sources:
         lines.append(
-            f"- **Section {source['subsection']} {source['title']}**  \n"
+            f"- **Section {source['subsection']} {source['title']}** \n"
             f"  `{source['chunk_id']}` | confidence {source['confidence']}  \n"
             f"  {source['snippet']}"
         )
@@ -201,154 +201,207 @@ def write_test_report(smoke_outputs: list[dict]) -> Path:
 def build_interface():
     import gradio as gr
 
+    # ------------------------------------------
+    # Adaptive UI Behaviors 
+    # ------------------------------------------
+    ui_state = {"interaction_count": 0}
+
+    def adaptive_height(text):
+        base_height = 430
+        if len(text) > 500:
+            return base_height + 200
+        elif len(text) > 300:
+            return base_height + 100
+        return base_height
+
+    def adaptive_font_size():
+        count = ui_state["interaction_count"]
+        if count > 10:
+            return 18
+        elif count > 5:
+            return 16
+        return 14
+
+    def adaptive_contrast():
+        return ui_state["interaction_count"] >= 12
+
+    high_contrast_css = """
+    :root { --dynamic-font-size: 14px; }
+    #adaptive-answer-box { font-size: var(--dynamic-font-size); }
+    .high-contrast { background-color: #000 !important; color: #fff !important; }
+    """
+
     ensure_pipeline()
     assistant = HRPolicyAssistant()
 
+    # ------------------------------------------
+    # SUBMIT FUNCTION
+    # ------------------------------------------
     def submit(user_message, chat_history, memory_state, name):
         if not user_message or not user_message.strip():
-            return chat_history, memory_state, "", "Enter a question to search KPM policies.", ""
+            return (
+                gr.update(), 
+                memory_state, 
+                "", 
+                "Enter a question to search KPM policies.", 
+                "", 
+                14,    # default font_size
+                False  # default high_contrast
+            )
+
+        ui_state["interaction_count"] += 1
+
         memory = ConversationMemory.from_state(memory_state)
         result = assistant.answer(user_message, name=name, memory=memory)
-        chat_history = (chat_history or []) + [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": result.answer},
-        ]
+
+        # Adaptive metrics
+        height = adaptive_height(result.answer)
+        font_size = adaptive_font_size()
+        high_contrast = adaptive_contrast()
+
+        chat_history = (chat_history or []) + [[user_message, result.answer]]
+
         return (
-            chat_history,
+            gr.update(value=chat_history, height=height),
             memory.to_state(),
             "",
             "Searched KPM policies.",
             sources_markdown(result.sources),
+            font_size,
+            high_contrast
         )
 
-    def quick_submit(question, chat_history, memory_state, name):
-        return submit(question, chat_history, memory_state, name)
-
+    # ------------------------------------------
+    # CLEAR CHAT
+    # ------------------------------------------
     def clear_chat():
-        return [], [], "Conversation cleared.", "No source sections retrieved."
+        return (
+            [],                     # chatbot
+            [],                     # memory_state
+            "",                     # message
+            "Conversation cleared.",# status
+            "No source sections retrieved.", # sources
+            14,                     # default font_size
+            False                   # default high_contrast
+        )
 
+    # ------------------------------------------
+    # REBUILD INDEX
+    # ------------------------------------------
     def rebuild():
-        status = rebuild_pipeline()
-        return status
+        return rebuild_pipeline()
 
-    with gr.Blocks(title="KPM HR Policy Assistant") as demo:
+    # ------------------------------------------
+    # UI LAYOUT
+    # ------------------------------------------
+    with gr.Blocks(title="KPM HR Policy Assistant", css=high_contrast_css) as demo:
+        gr.Markdown(
+            "## 👋 Welcome to the KPM HR Policy Assistant\n"
+            "I can answer questions about KPM HR policies using the official HR manual and show the source sections.\n\n"
+            "**Please begin by entering your name in the Name field above the chat.**"
+        )
 
-    # -------------------------
-    # HEADER
-    # -------------------------
-      gr.Markdown(
-          "## 👋 Welcome to the KPM HR Policy Assistant\n"
-          "I can answer questions about KPM HR policies using the official HR manual and show the source sections.\n\n"
-          "**Please begin by entering your name in the Name field above the chat.**"
-      )
+        memory_state = gr.State([])
+        
+        # Split UI metrics to bypass Pydantic schema dict bug
+        font_size_state = gr.State(14)
+        contrast_state = gr.State(False)
 
-      memory_state = gr.State([])
+        with gr.Row():
+            name = gr.Textbox(label="Name", value="Alex", scale=1)
+            status = gr.Textbox(label="Status", value="Ready to search KPM policies.", interactive=False, scale=2)
 
-      # -------------------------
-      # NAME + STATUS
-      # -------------------------
-      with gr.Row():
-          name = gr.Textbox(label="Name", value="Alex", scale=1)
-          status = gr.Textbox(
-              label="Status",
-              value="Ready to search KPM policies.",
-              interactive=False,
-              scale=2
-          )
+        # Default tuple behavior to avoid Pydantic issues
+        chatbot = gr.Chatbot(label="Chat", height=430)
+        sources = gr.Markdown("No source sections retrieved.", label="Source Citations")
 
-      # -------------------------
-      # CHATBOT + SOURCES
-      # -------------------------
-      chatbot = gr.Chatbot(label="Chat", type="messages", height=430, allow_tags=False)
-      sources = gr.Markdown("No source sections retrieved.", label="Source Citations")
+        with gr.Row():
+            message = gr.Textbox(label="Ask a question", placeholder="Example: How does FMLA work?", scale=5)
+            send = gr.Button("Send", variant="primary", scale=1)
 
-      # -------------------------
-      # ASK-A-QUESTION ROW
-      # -------------------------
-      with gr.Row():
-          message = gr.Textbox(
-              label="Ask a question",
-              placeholder="Example: How does FMLA work?",
-              scale=5,
-          )
-          send = gr.Button("Send", variant="primary", scale=1)
+        # JS function for dynamic CSS applying
+        apply_adaptive_css_js = """
+        (font_size, high_contrast) => {
+            document.documentElement.style.setProperty('--dynamic-font-size', font_size + 'px');
+            if (high_contrast) {
+                document.documentElement.classList.add("high-contrast");
+            } else {
+                document.documentElement.classList.remove("high-contrast");
+            }
+        }
+        """
 
-      # -------------------------
-      # ACCORDION 1 — QUICK QUESTIONS
-      # -------------------------
-      quick_questions = [
-          "How does FMLA work?",
-          "What happens if I'm late?",
-          "Can I work from home?",
-          "What PPE do I need?",
-          "What is the dress code?",
-          "What is the drug policy?",
-          "How does overtime work?",
-          "What if my paycheck is wrong?",
-          "How do performance reviews work?",
-      ]
+        event_outputs = [chatbot, memory_state, message, status, sources, font_size_state, contrast_state]
+        js_inputs = [font_size_state, contrast_state]
 
-      with gr.Accordion("Quick Questions", open=False):
-          with gr.Column():
-              for question in quick_questions:
-                  gr.Button(question).click(
-                      quick_submit,
-                      inputs=[gr.State(question), chatbot, memory_state, name],
-                      outputs=[chatbot, memory_state, message, status, sources],
-                  )
+        # MAIN EVENTS (API NAME = FALSE disables the broken schema generation)
+        send.click(
+            submit,
+            inputs=[message, chatbot, memory_state, name],
+            outputs=event_outputs,
+            api_name=False
+        ).then(fn=None, inputs=js_inputs, js=apply_adaptive_css_js)
 
-      # -------------------------
-      # ACCORDION 2 — BROWSE BY TOPIC
-      # -------------------------
-      topic_buttons = [
-          "1. Introduction & Company Overview",
-          "2. Employment Policies",
-          "3. Work Hours, Attendance & Scheduling",
-          "4. Compensation & Payroll",
-          "5. Benefits & Leave Policies",
-          "6. Workplace Conduct & Expectations",
-          "7. Health, Safety & Compliance",
-          "8. Technology & Data Policies",
-          "9. Performance Management",
-          "10. Disciplinary Action & Termination",
-      ]
+        message.submit(
+            submit,
+            inputs=[message, chatbot, memory_state, name],
+            outputs=event_outputs,
+            api_name=False
+        ).then(fn=None, inputs=js_inputs, js=apply_adaptive_css_js)
 
-      with gr.Accordion("Browse by Topic (Main Headings)", open=False):
-          with gr.Column():
-              for topic in topic_buttons:
-                  gr.Button(topic).click(
-                      quick_submit,
-                      inputs=[gr.State(f"Tell me about {topic}"), chatbot, memory_state, name],
-                      outputs=[chatbot, memory_state, message, status, sources],
-                  )
+        # QUICK QUESTIONS
+        quick_questions = [
+            "How does FMLA work?", "What happens if I'm late?", "Can I work from home?",
+            "What PPE do I need?", "What is the dress code?", "What is the drug policy?",
+            "How does overtime work?", "What if my paycheck is wrong?", "How do performance reviews work?",
+        ]
 
-      # -------------------------
-      # CLEAR + REBUILD BUTTONS
-      # -------------------------
-      with gr.Row():
-          clear = gr.Button("Clear conversation")
-          rebuild_button = gr.Button("Rebuild index")
+        def quick_submit_wrapper(btn_text, history, mem, user_name):
+            return submit(btn_text, history, mem, user_name)
 
-      # -------------------------
-      # EVENT BINDINGS
-      # -------------------------
-      send.click(
-          submit,
-          inputs=[message, chatbot, memory_state, name],
-          outputs=[chatbot, memory_state, message, status, sources],
-      )
+        with gr.Accordion("Quick Questions", open=False):
+            with gr.Column():
+                for question in quick_questions:
+                    btn = gr.Button(question)
+                    btn.click(
+                        quick_submit_wrapper,
+                        inputs=[btn, chatbot, memory_state, name],
+                        outputs=event_outputs,
+                        api_name=False
+                    ).then(fn=None, inputs=js_inputs, js=apply_adaptive_css_js)
 
-      message.submit(
-          submit,
-          inputs=[message, chatbot, memory_state, name],
-          outputs=[chatbot, memory_state, message, status, sources],
-      )
+        # TOPIC BROWSER
+        topic_buttons = [
+            "1. Introduction & Company Overview", "2. Employment Policies", 
+            "3. Work Hours, Attendance & Scheduling", "4. Compensation & Payroll", 
+            "5. Benefits & Leave Policies", "6. Workplace Conduct & Expectations", 
+            "7. Health, Safety & Compliance", "8. Technology & Data Policies", 
+            "9. Performance Management", "10. Disciplinary Action & Termination",
+        ]
 
-      clear.click(clear_chat, outputs=[chatbot, memory_state, status, sources])
-      rebuild_button.click(rebuild, outputs=[status])
+        def topic_submit_wrapper(btn_text, history, mem, user_name):
+            query = f"Tell me about {btn_text}"
+            return submit(query, history, mem, user_name)
+
+        with gr.Accordion("Browse by Topic (Main Headings)", open=False):
+            with gr.Column():
+                for topic in topic_buttons:
+                    btn = gr.Button(topic)
+                    btn.click(
+                        topic_submit_wrapper,
+                        inputs=[btn, chatbot, memory_state, name],
+                        outputs=event_outputs,
+                        api_name=False
+                    ).then(fn=None, inputs=js_inputs, js=apply_adaptive_css_js)
+
+        with gr.Row():
+            clear = gr.Button("Clear conversation")
+            rebuild_button = gr.Button("Rebuild index")
+
+        clear.click(clear_chat, outputs=event_outputs, api_name=False).then(fn=None, inputs=js_inputs, js=apply_adaptive_css_js)
+        rebuild_button.click(rebuild, outputs=[status], api_name=False)
 
     return demo
-
 
 
 def main() -> None:
@@ -357,8 +410,12 @@ def main() -> None:
     parser.add_argument("--debug-rag", action="store_true", help="Print hard RAG diagnostics and one sample answer.")
     parser.add_argument("--debug-query", default="How does FMLA work?", help="Question to use with --debug-rag.")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild the policy index before launching.")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=7860)
+
+    # Required for Colab — prevents unrecognized argument error
+    parser.add_argument("-f", "--file", help="Colab kernel file", default=None)
+
     args = parser.parse_args()
 
     if args.rebuild:
@@ -373,7 +430,7 @@ def main() -> None:
         return
 
     demo = build_interface()
-    demo.launch(server_name=args.host, server_port=args.port, share=True)
+    demo.launch(server_name=args.host, server_port=args.port)
 
 
 if __name__ == "__main__":
