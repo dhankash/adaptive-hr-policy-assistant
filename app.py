@@ -259,7 +259,11 @@ def build_interface():
         font_size = adaptive_font_size()
         high_contrast = adaptive_contrast()
 
-        chat_history = (chat_history or []) + [[user_message, result.answer]]
+        chat_history = (chat_history or []) + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": result.answer},
+        ]
+
 
         return (
             gr.update(value=chat_history, height=height),
